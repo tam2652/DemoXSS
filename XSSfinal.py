@@ -18,13 +18,13 @@ visited_urls = set()
 # Khóa để đảm bảo an toàn khi truy cập 'visited_urls' trong môi trường đa luồng
 visited_urls_lock = threading.Lock()
 
-def extract_internal_links(url):
+def extract_internal_links(url, session):
     """
     Hàm trích xuất các liên kết nội bộ từ một URL nhất định
     """
     internal_links = set()
     try:
-        response = requests.get(url)
+        response = session.get(url)
         if response.status_code == 200:
             page_content = response.text
             base_url = get_base_url(url)
@@ -114,15 +114,42 @@ def perform_xss_checks_textarea(url, textarea_fields):
                 vulnerable = True
                 break
         if vulnerable:
-            print(f'{Fore.RED}Dễ bị tấn công{Style.RESET_ALL}: {textarea_field} trong {url} với payload: {payload}')
-            logging.info(f'Dễ bị tấn công: {textarea_field} trong {url} với payload: {payload}')
+            print(f'{Fore.RED}NGUY HIỂM{Style.RESET_ALL}: {textarea_field} trong {url} | payload: {payload}')
+            logging.info(f'NGUY HIỂM: {textarea_field} trong {url} | payload: {payload}')
         else:
             print(f'An toàn: {textarea_field} trong {url}')
 
-def perform_xss_checks(url, max_depth=3):
+def login(session, login_url, username, password):
+    """
+    Hàm đăng nhập vào trang web
+    """
+    payload = {
+        'uname': username,
+        'pass': password,
+        'login': 'login'
+    }
+    try:
+        response = session.post(login_url, data=payload)
+        if response.status_code == 200 and "Logout" in response.text:  # Điều kiện này có thể cần thay đổi tùy thuộc vào trang web
+            print(f"{Fore.GREEN}Đăng nhập thành công{Style.RESET_ALL}")
+            return True
+        else:
+            print(f"{Fore.RED}Đăng nhập thất bại{Style.RESET_ALL}")
+            return False
+    except requests.RequestException as e:
+        print(f"{Fore.RED}Lỗi khi đăng nhập: {e}{Style.RESET_ALL}")
+        return False
+
+def perform_xss_checks(url, login_url=None, username=None, password=None, max_depth=3):
     """
     Hàm kiểm tra XSS trên các trang web, bắt đầu từ một URL nhất định và đệ quy tới các liên kết nội bộ
     """
+    session = requests.Session()
+
+    if login_url and username and password:
+        if not login(session, login_url, username, password):
+            return
+
     # Hàng đợi hai đầu để duyệt qua các trang
     queue = deque([(url, 0)])
     visited_urls.add(url)
@@ -134,7 +161,7 @@ def perform_xss_checks(url, max_depth=3):
             continue
 
         try:
-            response = requests.get(current_url, headers={'User-Agent': 'Mozilla/5.0'}) #gửi yêu cầu HTTP GET đến URL hiện tại
+            response = session.get(current_url, headers={'User-Agent': 'Mozilla/5.0'}) #gửi yêu cầu HTTP GET đến URL hiện tại
             if response.status_code == 200: #yêu cầu thành công
                 page_content = response.text #lấy nội dung của trang web
                 # Tìm tất cả các thẻ input và textarea
@@ -144,7 +171,7 @@ def perform_xss_checks(url, max_depth=3):
                 perform_xss_checks_input(current_url, input_fields)
                 perform_xss_checks_textarea(current_url, textarea_fields)
                 # Trích xuất các liên kết nội bộ
-                internal_links = extract_internal_links(current_url)
+                internal_links = extract_internal_links(current_url, session)
                 for link in internal_links:
                     with visited_urls_lock:
                         if link not in visited_urls:
@@ -153,6 +180,10 @@ def perform_xss_checks(url, max_depth=3):
         except requests.RequestException as e: #nếu xảy ra lỗi khi gửi yêu cầu HTTP, in ra cảnh báo
             print(f"{Fore.YELLOW}Cảnh báo: Không thể truy xuất {current_url}: {e}{Style.RESET_ALL}")
 
-# Nhận URL từ người dùng và bắt đầu kiểm tra XSS
-url = input("Nhập URL: ")
-perform_xss_checks(url)
+# Nhận URL và thông tin đăng nhập từ người dùng và bắt đầu kiểm tra XSS
+url = "http://testphp.vulnweb.com/"
+login_url = "http://testphp.vulnweb.com/userinfo.php"
+username = "test"
+password = "test"
+
+perform_xss_checks(url, login_url, username, password)

